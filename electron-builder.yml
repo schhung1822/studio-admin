@@ -1,0 +1,30 @@
+# Windows installer for the desktop build (npm run desktop:dist → dist-desktop/).
+appId: vn.studioedit.app
+productName: Studio Edit
+copyright: Copyright © Studio Edit
+directories:
+  output: dist-desktop
+  buildResources: desktop/build
+# Only the Electron shell goes into app.asar; the web app runs from the standalone server.
+files:
+  - desktop/main.cjs
+  - desktop/preload.cjs
+  - package.json
+  - "!**/node_modules/**"
+# The Next.js server (.next/standalone → resources/web) is copied by desktop/scripts/after-pack.cjs.
+afterPack: desktop/scripts/after-pack.cjs
+extraResources:
+  - from: desktop/bin
+    to: bin
+    filter: ["ffmpeg.exe", "ffprobe.exe"]
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: StudioEdit-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: Studio Edit

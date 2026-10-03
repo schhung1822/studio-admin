@@ -6,21 +6,35 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "postinstall": "node scripts/copy-ffmpeg-worker.mjs",
+    "desktop:ffmpeg": "node desktop/scripts/fetch-ffmpeg.mjs",
+    "desktop:build-web": "node desktop/scripts/build-web.mjs",
+    "desktop:dev": "npm run desktop:ffmpeg && npm run desktop:build-web && npm run desktop:start",
+    "desktop:dist": "npm run desktop:ffmpeg && npm run desktop:build-web && electron-builder --win nsis",
+    "desktop:start": "node desktop/scripts/start.mjs"
   },
   "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
+    "@shopify/polaris": "^13.9.5",
+    "fflate": "^0.8.3",
     "next": "16.3.8",
-    "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3",
     "eslint": "^9",
     "eslint-config-next": "16.3.8",
     "tailwindcss": "^4",
     "typescript": "^5"
-  }
+  },
+  "description": "Studio Edit – bộ công cụ xử lý video (web + Windows)",
+  "main": "desktop/main.cjs"
 }
