@@ -1,5 +1,5 @@
 import type { IconSource } from "@shopify/polaris";
-import { ExchangeIcon, HomeIcon, ImagesIcon, PlayCircleIcon, SettingsIcon, ShieldCheckMarkIcon, TextBlockIcon } from "@shopify/polaris-icons";
+import { ExchangeIcon, HomeIcon, ImagesIcon, PlayCircleIcon, SettingsIcon, ShieldCheckMarkIcon, SoundIcon, TextBlockIcon } from "@shopify/polaris-icons";
 
 export interface NavItem {
   label: string;
@@ -42,6 +42,13 @@ export const NAV_SECTIONS: NavSection[] = [
         url: "/video-converter",
         icon: ExchangeIcon,
         description: "Đổi video sang MP4, MOV, MKV, WebM, AVI, GIF hoặc tách âm thanh MP3/M4A/WAV. Hỗ trợ nhiều file cùng lúc.",
+      },
+      {
+        label: "Tách âm thanh",
+        url: "/audio-extractor",
+        icon: SoundIcon,
+        description:
+          "Lấy riêng âm thanh từ video: giữ nguyên chất lượng gốc hoặc xuất MP3, M4A, OGG, WAV, FLAC. Chọn track, cắt đoạn, chuẩn hóa âm lượng.",
       },
       {
         label: "Phân cảnh theo phụ đề",

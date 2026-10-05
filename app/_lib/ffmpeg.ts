@@ -298,8 +298,11 @@ export interface ProbeStream {
   index: number;
   codec_type?: string;
   codec_name?: string;
+  channels?: number;
+  sample_rate?: string;
+  bit_rate?: string;
   tags?: Record<string, string>;
-  disposition?: { attached_pic?: number };
+  disposition?: { attached_pic?: number; default?: number };
 }
 
 export interface ProbeResult {
