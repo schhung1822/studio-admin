@@ -33,7 +33,8 @@ import {
   type TranscribeResponse,
 } from "../_lib/speech";
 import { captureFrames } from "../_lib/frames";
-import { approximateWords, buildScenes, wordJoinerFor } from "../_lib/scenes";
+import { approximateWords, buildScenes, wordJoinerFor, type SceneSpan } from "../_lib/scenes";
+import { distributeToScenes, joinerForText, parseSubtitleFile, timeImportedWords } from "../_lib/subtitle-file";
 import { canPickDirectory, downloadAsZip, isUserCancel, saveToPickedDirectory, type ExportFile } from "../_lib/export-folder";
 
 type Status = "idle" | "extracting" | "transcribing" | "capturing" | "completed" | "error";
@@ -46,6 +47,14 @@ interface Scene {
   text: string;
   frameTime: number;
   image?: { blob: Blob; url: string };
+}
+
+/** Subtitles loaded from an .srt/.txt file; they replace the recognised text. */
+interface ImportedSubtitles {
+  id: number;
+  name: string;
+  cues: SceneSpan[];
+  joiner: string;
 }
 
 const STATUS_META: Record<Status, { label: string; tone?: "info" | "attention" | "success" | "critical" }> = {
@@ -64,6 +73,7 @@ const POSITION_OPTIONS = [
 ];
 
 let nextSceneId = 1;
+let nextImportId = 1;
 const subscribeNever = () => () => {};
 
 function frameTimeFor(scene: Pick<Scene, "start" | "end">, position: FramePosition, videoDuration: number | null) {
@@ -95,6 +105,8 @@ export default function SubtitleScenesPage() {
   const [segmented, setSegmented] = useState<{ key: string; range: [number, number] } | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
+  const [imported, setImported] = useState<ImportedSubtitles | null>(null);
+  const [importNotice, setImportNotice] = useState<{ tone: "success" | "warning" | "critical"; message: string } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -103,11 +115,15 @@ export default function SubtitleScenesPage() {
   const busyRef = useRef(false);
 
   const busy = status === "extracting" || status === "transcribing" || status === "capturing";
-  const tooLong = videoDuration !== null && videoDuration > MAX_SPEECH_SECONDS;
+  // The length limit only exists for Groq; an imported subtitle file needs no recognition.
+  const tooLong = videoDuration !== null && videoDuration > MAX_SPEECH_SECONDS && !imported;
   const transcriptKey = `${fileId}|${language}`;
   const hasTranscript = transcript?.key === transcriptKey;
-  const segmentationKey = `${transcriptKey}|${sceneRange[0]}-${sceneRange[1]}`;
-  const scenesCurrent = hasTranscript && segmented?.key === segmentationKey && scenes.length > 0;
+  // Where the scene text comes from: the imported file if there is one, else Groq's transcript.
+  const sourceKey = imported ? `file:${imported.id}` : transcriptKey;
+  const hasSource = Boolean(imported) || hasTranscript;
+  const segmentationKey = `${sourceKey}|${sceneRange[0]}-${sceneRange[1]}`;
+  const scenesCurrent = hasSource && segmented?.key === segmentationKey && scenes.length > 0;
   const allCaptured = scenes.length > 0 && scenes.every((scene) => scene.image);
 
   // `false` during server render and hydration, the real value afterwards.
@@ -174,6 +190,8 @@ export default function SubtitleScenesPage() {
 
   const clearFile = useCallback(() => {
     resetAll();
+    setImported(null);
+    setImportNotice(null);
     setFile(null);
     setPreviewUrl(null);
     setVideoDuration(null);
@@ -191,7 +209,7 @@ export default function SubtitleScenesPage() {
       // Three levels of reuse: the transcript (same video + language), the scene list with
       // its text edits (same duration range too), or nothing.
       let meta = hasTranscript ? transcript!.meta : null;
-      if (!meta) {
+      if (!meta && !imported) {
         setStatus("extracting");
         const audio = await extractSpeechAudio(file, {
           durationHint: videoDuration,
@@ -214,8 +232,13 @@ export default function SubtitleScenesPage() {
       if (!scenesCurrent) {
         // Regroup the words into scenes of the requested length, cutting at sentence ends,
         // then commas, then pauses. Without word timings (translate mode) they are estimated.
-        const joiner = wordJoinerFor(language);
-        const words = meta.words?.length ? meta.words : approximateWords(meta.segments, joiner);
+        // Imported subtitles keep their own timings, refined by Groq's word timings if present.
+        const joiner = imported ? imported.joiner : wordJoinerFor(language);
+        const words = imported
+          ? timeImportedWords(imported.cues, meta?.words ?? null, joiner)
+          : meta!.words?.length
+            ? meta!.words
+            : approximateWords(meta!.segments, joiner);
         const spans = buildScenes(words, {
           minDuration: sceneRange[0],
           maxDuration: sceneRange[1],
@@ -272,7 +295,54 @@ export default function SubtitleScenesPage() {
       busyRef.current = false;
       if (abortRef.current === controller) abortRef.current = null;
     }
-  }, [file, hasTranscript, language, position, releaseImages, scenes, sceneRange, scenesCurrent, segmentationKey, tooLong, transcript, transcriptKey, videoDuration]);
+  }, [file, hasTranscript, imported, language, position, releaseImages, scenes, sceneRange, scenesCurrent, segmentationKey, tooLong, transcript, transcriptKey, videoDuration]);
+
+  const handleImportDrop = useCallback(async (_all: File[], accepted: File[], rejected: File[]) => {
+    const picked = accepted[0] ?? rejected[0];
+    if (!picked) return;
+    if (!/\.(srt|vtt|txt)$/i.test(picked.name)) {
+      setImportNotice({ tone: "critical", message: `"${picked.name}" không phải file .srt, .vtt hoặc .txt.` });
+      return;
+    }
+    try {
+      const cues = parseSubtitleFile(await picked.text());
+      const joiner = joinerForText(cues.map((cue) => cue.text).join(" "));
+      setImported({ id: nextImportId++, name: picked.name, cues, joiner });
+      setImportNotice(null);
+    } catch (error) {
+      setImportNotice({ tone: "critical", message: describeError(error, "Không đọc được file phụ đề.") });
+    }
+  }, []);
+
+  const removeImported = useCallback(() => {
+    setImported(null);
+    setImportNotice(null);
+  }, []);
+
+  /** Keeps the scenes and their frames; only their text is re-split from the imported subtitles. */
+  const handleApplyImported = useCallback(() => {
+    if (!imported || scenes.length === 0) return;
+    const reference = hasTranscript ? transcript!.meta.words : null;
+    const words = timeImportedWords(imported.cues, reference, imported.joiner);
+    const { texts, unassigned } = distributeToScenes(words, scenes, imported.joiner);
+    setScenes((prev) => prev.map((scene, index) => ({ ...scene, text: texts[index] ?? scene.text })));
+    // The scenes now count as built from this file, at the range they were originally cut with.
+    const range = segmented?.range ?? sceneRange;
+    setSegmented({ key: `${sourceKey}|${range[0]}-${range[1]}`, range });
+
+    const empty = texts.filter((text) => !text).length;
+    const problems = [
+      empty > 0 && `${empty} cảnh không có lời nào trong file`,
+      unassigned > 0 && `${unassigned} từ nằm ngoài mọi cảnh nên bị bỏ qua (cảnh đã bị xóa hoặc mốc thời gian lệch)`,
+    ].filter(Boolean);
+    setImportNotice({
+      tone: problems.length > 0 ? "warning" : "success",
+      message:
+        `Đã chia lại phụ đề cho ${scenes.length} cảnh, khung hình giữ nguyên` +
+        (reference?.length ? ", căn theo thời gian từng từ Groq nghe được." : ".") +
+        (problems.length > 0 ? ` Lưu ý: ${problems.join("; ")}.` : ""),
+    });
+  }, [hasTranscript, imported, sceneRange, scenes, segmented, sourceKey, transcript]);
 
   const handleCancel = useCallback(() => {
     abortRef.current?.abort();
@@ -305,6 +375,7 @@ export default function SubtitleScenesPage() {
       generatedAt: new Date().toISOString(),
       source: { fileName: file?.name ?? null, duration: videoDuration === null ? null : round3(videoDuration) },
       language: transcript?.meta.language ?? language,
+      subtitleSource: imported ? { type: "file", fileName: imported.name } : { type: "groq" },
       detectedLanguage: transcript?.meta.detectedLanguage ?? null,
       framePosition: position,
       sceneDuration: segmented ? { min: segmented.range[0], max: segmented.range[1] } : null,
@@ -327,7 +398,7 @@ export default function SubtitleScenesPage() {
         compress: true,
       },
     ];
-  }, [file, frameName, language, position, scenes, segmented, transcript, videoDuration]);
+  }, [file, frameName, imported, language, position, scenes, segmented, transcript, videoDuration]);
 
   const handleSaveFolder = useCallback(async () => {
     setExporting(true);
@@ -374,7 +445,13 @@ export default function SubtitleScenesPage() {
       title="Phân cảnh theo phụ đề"
       subtitle="Nhận dạng phụ đề rồi chụp một khung hình cho mỗi câu thoại. Xuất ra thư mục gồm ảnh đánh số và content.json."
       primaryAction={{
-        content: !hasTranscript ? "Phân tích video" : !scenesCurrent ? "Chia lại cảnh" : "Chụp lại khung hình",
+        content: !hasSource
+          ? "Phân tích video"
+          : !scenesCurrent
+            ? scenes.length > 0
+              ? "Chia lại cảnh"
+              : "Tạo phân cảnh"
+            : "Chụp lại khung hình",
         onAction: handleAnalyze,
         disabled: !file || tooLong || busy,
         loading: busy,
@@ -445,7 +522,9 @@ export default function SubtitleScenesPage() {
                   <Box paddingBlock="600">
                     <Text as="p" tone="subdued" alignment="center">
                       {file
-                        ? "Bấm “Phân tích video” để nhận dạng phụ đề và chụp khung hình cho từng câu."
+                        ? imported
+                          ? "Bấm “Tạo phân cảnh” để chia cảnh theo file phụ đề đã nhập và chụp khung hình cho từng câu."
+                          : "Bấm “Phân tích video” để nhận dạng phụ đề và chụp khung hình cho từng câu."
                         : "Tải video lên để bắt đầu."}
                     </Text>
                   </Box>
@@ -567,7 +646,7 @@ export default function SubtitleScenesPage() {
                   }}
                   disabled={busy}
                   helpText={
-                    hasTranscript && !scenesCurrent
+                    hasSource && scenes.length > 0 && !scenesCurrent
                       ? `${sceneRange[0]}–${sceneRange[1]} giây. Bấm “Chia lại cảnh” để áp dụng (không cần nhận dạng lại, nhưng các chỉnh sửa phụ đề sẽ bị thay thế).`
                       : `${sceneRange[0]}–${sceneRange[1]} giây. Cảnh được cắt ưu tiên sau dấu chấm, rồi dấu phẩy, rồi chỗ ngắt hơi.`
                   }
@@ -584,6 +663,67 @@ export default function SubtitleScenesPage() {
                       : "Mặc định chụp ở giữa thời gian của mỗi câu phụ đề."
                   }
                 />
+              </BlockStack>
+            </Card>
+
+            <Card>
+              <BlockStack gap="300">
+                <Text as="h2" variant="headingMd">
+                  Phụ đề từ file
+                </Text>
+                {!imported ? (
+                  <DropZone
+                    accept=".srt,.vtt,.txt"
+                    type="file"
+                    allowMultiple={false}
+                    onDrop={handleImportDrop}
+                    disabled={busy}
+                    label="File phụ đề"
+                    labelHidden
+                  >
+                    <DropZone.FileUpload actionTitle="Chọn file .srt / .txt" actionHint="Có mốc thời gian dạng SRT" />
+                  </DropZone>
+                ) : (
+                  <BlockStack gap="200">
+                    <InlineStack align="space-between" blockAlign="start" gap="200" wrap={false}>
+                      <BlockStack gap="050">
+                        <Text as="p" fontWeight="semibold" breakWord>
+                          {imported.name}
+                        </Text>
+                        <Text as="p" variant="bodySm" tone="subdued">
+                          {imported.cues.length} câu · {formatTimecode(imported.cues[0].start, { fractional: false })} →{" "}
+                          {formatTimecode(imported.cues[imported.cues.length - 1].end, { fractional: false })}
+                        </Text>
+                      </BlockStack>
+                      <Button variant="plain" tone="critical" onClick={removeImported} disabled={busy}>
+                        Gỡ
+                      </Button>
+                    </InlineStack>
+                    {videoDuration !== null && imported.cues[imported.cues.length - 1].end > videoDuration + 1 && (
+                      <Banner tone="warning">
+                        <p>Mốc thời gian trong file dài hơn video – có thể file không khớp với video này.</p>
+                      </Banner>
+                    )}
+                    {scenes.length > 0 && (
+                      <Button variant="primary" onClick={handleApplyImported} disabled={busy} fullWidth>
+                        {`Thay phụ đề vào ${scenes.length} cảnh hiện có`}
+                      </Button>
+                    )}
+                  </BlockStack>
+                )}
+                <Text as="p" variant="bodySm" tone="subdued">
+                  {!imported
+                    ? "Dùng khi Groq nhận dạng sai từ: nội dung và mốc thời gian trong file sẽ thay cho kết quả nhận dạng."
+                    : scenes.length > 0
+                      ? "“Thay phụ đề” giữ nguyên khung hình và chia lại lời theo mốc thời gian của từng cảnh. “Chia lại cảnh” cắt cảnh mới theo câu trong file."
+                      : "Cảnh sẽ được chia theo nội dung và mốc thời gian trong file, không cần gọi Groq."}
+                  {imported && hasTranscript && " Thời gian từng từ được căn thêm theo giọng nói Groq đã nhận dạng."}
+                </Text>
+                {importNotice && (
+                  <Banner tone={importNotice.tone} onDismiss={() => setImportNotice(null)}>
+                    <p>{importNotice.message}</p>
+                  </Banner>
+                )}
               </BlockStack>
             </Card>
 
