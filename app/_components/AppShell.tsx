@@ -51,7 +51,17 @@ function AppLink({ url, external, download, children, ...rest }: AppLinkProps) {
 
 function WorkspaceBadge() {
   return (
-    <div style={{ display: "flex", alignItems: "center", height: "100%", paddingInline: "var(--p-space-300)" }}>
+    // Polaris gives the context-control slot no height, so "100%" collapsed to the badge's own
+    // height and it sat off-centre; size it to the top bar explicitly.
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        height: "var(--pg-top-bar-height)",
+        boxSizing: "border-box",
+        paddingInline: "var(--p-space-300)",
+      }}
+    >
       <Link href="/" style={{ display: "inline-flex", textDecoration: "none", color: "inherit" }}>
         <Box background="bg-surface" borderRadius="200" paddingBlock="100" paddingInlineStart="100" paddingInlineEnd="300">
           <InlineStack gap="200" blockAlign="center" wrap={false}>
