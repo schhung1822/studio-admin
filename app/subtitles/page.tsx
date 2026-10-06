@@ -31,10 +31,41 @@ import {
 const FORMAT_OPTIONS = [
   { label: "Phụ đề SubRip (.srt)", value: "srt" },
   { label: "Văn bản thuần (.txt)", value: "text" },
+  { label: "Lời bài hát LRC (.txt)", value: "lrc" },
 ];
 
 type Status = "idle" | "extracting" | "transcribing" | "completed" | "error";
-type OutputFormat = "srt" | "text";
+type OutputFormat = "srt" | "text" | "lrc";
+
+const EMPTY_OUTPUTS: Record<OutputFormat, string> = { srt: "", text: "", lrc: "" };
+
+// A silence at least this long after a line (e.g. an instrumental break) gets an empty
+// timestamp line, so karaoke players clear the previous lyric instead of leaving it up.
+const LRC_BREAK_SECONDS = 4;
+
+/** 83.456 -> "01:23.46" (minutes keep counting past 59, as LRC players expect). */
+function formatLrcTimestamp(seconds: number) {
+  const centis = Math.max(0, Math.round(seconds * 100));
+  const minutes = Math.floor(centis / 6000);
+  const secs = Math.floor((centis % 6000) / 100);
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `[${pad(minutes)}:${pad(secs)}.${pad(centis % 100)}]`;
+}
+
+/** One "[mm:ss.xx]lyric" line per segment, plus an empty line at long breaks and at the end. */
+function segmentsToLrc(segments: TranscribeResponse["segments"]) {
+  const lines = segments
+    .map((segment) => ({ ...segment, text: segment.text.replace(/\s+/g, " ").trim() }))
+    .filter((segment) => segment.text);
+  return lines
+    .flatMap((segment, index) => {
+      const next = lines[index + 1];
+      const out = [`${formatLrcTimestamp(segment.start)}${segment.text}`];
+      if (!next || next.start - segment.end >= LRC_BREAK_SECONDS) out.push(formatLrcTimestamp(segment.end));
+      return out;
+    })
+    .join("\n");
+}
 
 const STATUS_META: Record<Status, { label: string; tone?: "info" | "attention" | "success" | "critical" }> = {
   idle: { label: "Sẵn sàng" },
@@ -58,7 +89,7 @@ export default function SubtitlesPage() {
   const [stageDetail, setStageDetail] = useState("");
   const [progress, setProgress] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [outputs, setOutputs] = useState<Record<OutputFormat, string>>({ srt: "", text: "" });
+  const [outputs, setOutputs] = useState<Record<OutputFormat, string>>(EMPTY_OUTPUTS);
   const [resultMeta, setResultMeta] = useState<TranscribeResponse | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -97,7 +128,7 @@ export default function SubtitlesPage() {
     setStageDetail("");
     setProgress(0);
     setErrorMessage(null);
-    setOutputs({ srt: "", text: "" });
+    setOutputs(EMPTY_OUTPUTS);
     setResultMeta(null);
   }, []);
 
@@ -160,7 +191,7 @@ export default function SubtitlesPage() {
       if (!mountedRef.current) return;
 
       if (!result.text) throw new Error("Không phát hiện giọng nói trong video.");
-      setOutputs({ srt: result.srt, text: result.text });
+      setOutputs({ srt: result.srt, text: result.text, lrc: segmentsToLrc(result.segments) });
       setResultMeta(result);
       setStageDetail("");
       setStatus("completed");
@@ -189,7 +220,7 @@ export default function SubtitlesPage() {
 
   const handleDownload = useCallback(() => {
     const baseName = file?.name.replace(/\.[^.]+$/, "") || "subtitles";
-    const extension = format === "srt" ? "srt" : "txt";
+    const extension = format === "srt" ? "srt" : format === "lrc" ? "lyrics.txt" : "txt";
     downloadBlob(
       new Blob([currentOutput], { type: "text/plain;charset=utf-8" }),
       `${baseName}.${language === "translate-en" ? "en" : language}.${extension}`,
@@ -326,6 +357,11 @@ export default function SubtitlesPage() {
                   options={FORMAT_OPTIONS}
                   value={format}
                   onChange={(value) => setFormat(value as OutputFormat)}
+                  helpText={
+                    format === "lrc"
+                      ? "Mỗi câu một dòng dạng [phút:giây.xx]lời, dùng cho trình phát nhạc/karaoke. Xuất ra file .txt."
+                      : undefined
+                  }
                 />
               </BlockStack>
             </Card>
