@@ -32,6 +32,7 @@
     "electron-builder": "^26.15.3",
     "eslint": "^9",
     "eslint-config-next": "16.3.8",
+    "onnxruntime-web": "1.30.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   },

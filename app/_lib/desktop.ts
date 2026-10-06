@@ -41,6 +41,16 @@ export interface DesktopBridge {
     get(): Promise<DesktopSettings>;
     set(patch: Partial<DesktopSettings>): Promise<DesktopSettings>;
   };
+  /**
+   * Downloaded AI model files, kept in %APPDATA%/Studio Edit/models. Keys are relative paths
+   * such as "supertonic-3-xxxx/onnx/vocoder.onnx". Missing in installers built before this existed.
+   */
+  models?: {
+    read(key: string): Promise<Uint8Array | null>;
+    write(key: string, data: Uint8Array): Promise<void>;
+    has(keys: string[]): Promise<boolean>;
+    clear(): Promise<void>;
+  };
 }
 
 declare global {

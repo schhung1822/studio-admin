@@ -2,6 +2,7 @@
 // - Starts the bundled Next.js server (.next/standalone) on a private localhost port.
 // - Runs native ffmpeg.exe / ffprobe.exe for the renderer (see app/_lib/ffmpeg.ts NativeEngine).
 // - Stores user settings (Groq API key) in %APPDATA%/<app>/settings.json.
+// - Keeps downloaded AI models (text-to-speech) in %APPDATA%/<app>/models.
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
@@ -25,6 +26,14 @@ app.setName("Studio Edit");
 if (process.env.STUDIO_USER_DATA) app.setPath("userData", process.env.STUDIO_USER_DATA);
 
 const settingsFile = () => path.join(app.getPath("userData"), "settings.json");
+const modelsDir = () => path.join(app.getPath("userData"), "models");
+/** Resolves a model key ("supertonic-3-xxxx/onnx/vocoder.onnx") inside modelsDir. */
+function modelPath(key) {
+  const root = modelsDir();
+  const target = path.resolve(root, String(key));
+  if (!target.startsWith(root + path.sep)) throw new Error(`Invalid model path: ${key}`);
+  return target;
+}
 // Scratch space for FFmpeg outputs; wiped on start and quit.
 const scratchDir = path.join(os.tmpdir(), `studio-edit-${process.pid}`);
 
@@ -235,6 +244,28 @@ function registerIpc() {
       await fsp.writeFile(target, file.data);
     }
     return name;
+  });
+
+  // Downloaded model files (text-to-speech). The renderer's own caches are useless here: the
+  // UI is served from a new localhost port on every launch, i.e. a new origin.
+  ipcMain.handle("models:read", async (_event, key) => {
+    try {
+      return new Uint8Array(await fsp.readFile(modelPath(key)));
+    } catch (error) {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    }
+  });
+  ipcMain.handle("models:write", async (_event, key, data) => {
+    const target = modelPath(key);
+    await fsp.mkdir(path.dirname(target), { recursive: true });
+    // Write then rename, so an interrupted download never leaves a truncated model behind.
+    await fsp.writeFile(`${target}.part`, data);
+    await fsp.rename(`${target}.part`, target);
+  });
+  ipcMain.handle("models:has", (_event, keys) => keys.every((key) => fs.existsSync(modelPath(key))));
+  ipcMain.handle("models:clear", async () => {
+    await fsp.rm(modelsDir(), { recursive: true, force: true });
   });
 
   ipcMain.handle("settings:get", () => readSettings());

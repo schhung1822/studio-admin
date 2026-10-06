@@ -1,5 +1,5 @@
 import type { IconSource } from "@shopify/polaris";
-import { ExchangeIcon, HomeIcon, ImagesIcon, PlayCircleIcon, SettingsIcon, ShieldCheckMarkIcon, SoundIcon, TextBlockIcon } from "@shopify/polaris-icons";
+import { ExchangeIcon, HomeIcon, ImagesIcon, MicrophoneIcon, PlayCircleIcon, SettingsIcon, ShieldCheckMarkIcon, SoundIcon, TextBlockIcon } from "@shopify/polaris-icons";
 
 export interface NavItem {
   label: string;
@@ -63,6 +63,13 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: ShieldCheckMarkIcon,
         description:
           "Xóa toàn bộ siêu dữ liệu (GPS, thiết bị, ngày quay, phần mềm…) khỏi video mà không giảm chất lượng.",
+      },
+      {
+        label: "Tạo giọng nói",
+        url: "/text-to-speech",
+        icon: MicrophoneIcon,
+        description:
+          "Chuyển văn bản thành giọng nói tự nhiên (31 ngôn ngữ, có tiếng Việt) bằng Supertonic 3, chạy ngay trên máy. Xuất WAV/MP3.",
       },
     ],
   },

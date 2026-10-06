@@ -1,6 +1,7 @@
 # Studio Edit
 
-Bộ công cụ xử lý video: tách phụ đề, cắt video, chuyển đổi định dạng, phân cảnh theo phụ đề, làm sạch metadata.
+Bộ công cụ xử lý video: tách phụ đề, cắt video, chuyển đổi định dạng, phân cảnh theo phụ đề, làm sạch metadata,
+tạo giọng nói từ văn bản.
 Cùng một mã nguồn chạy được ở hai dạng:
 
 | | Bản web | Bản Windows |
@@ -8,6 +9,7 @@ Cùng một mã nguồn chạy được ở hai dạng:
 | Xử lý video | FFmpeg.wasm trong trình duyệt | `ffmpeg.exe` gốc (đa luồng, NVENC/QSV/AMF) |
 | File đầu vào | Đọc qua trình duyệt | Đọc trực tiếp từ ổ đĩa |
 | Groq API key | Biến môi trường `GROQ_API_KEY` trên máy chủ | Người dùng nhập trong **Cài đặt** |
+| Tạo giọng nói | Mô hình lưu trong Cache Storage của trình duyệt | Mô hình lưu trong `%APPDATA%/Studio Edit/models` |
 | Triển khai | Vercel | Bộ cài `.exe` |
 
 ## Bản web
@@ -39,6 +41,20 @@ Cấu trúc:
   (`%APPDATA%/Studio Edit/settings.json`).
 - `desktop/preload.cjs` – cầu nối `window.studioDesktop` cho giao diện (kiểu dữ liệu ở `app/_lib/desktop.ts`).
 - `app/_lib/ffmpeg.ts` – `MediaEngine`: tự chọn FFmpeg.wasm (web) hoặc FFmpeg gốc (Windows).
+
+## Tạo giọng nói (Supertonic 3)
+
+Công cụ `/text-to-speech` dùng [Supertonic 3](https://github.com/supertone-oss-archive/supertonic) (31 ngôn ngữ,
+có tiếng Việt, 10 giọng mẫu, thẻ biểu cảm `<laugh>`, `<breath>`, `<sigh>`) và chạy hoàn toàn trên máy người dùng:
+
+- Lần đầu dùng, trình duyệt tải mô hình (~380 MB) từ Hugging Face (`supertone-oss-archive/supertonic-3`, cố định
+  theo revision) rồi lưu lại; các lần sau không cần tải nữa. Nút **Xóa mô hình đã tải** trên trang để giải phóng dung lượng.
+- Suy luận chạy trong Web Worker bằng onnxruntime-web (WebGPU, tự lùi về WebAssembly), nạp từ jsDelivr lúc chạy.
+  Gói `onnxruntime-web` trong devDependencies chỉ dùng cho kiểu TypeScript; khi nâng cấp, sửa luôn `ORT_URL`
+  trong `app/_lib/tts/tts.worker.ts`.
+- Mã nguồn: `app/_lib/tts/supertonic.ts` (pipeline, chuyển từ `web/helper.js` của repo gốc), `tts.worker.ts`,
+  `client.ts` (tải và lưu mô hình, quản lý worker).
+- Giấy phép: mã mẫu MIT, mô hình OpenRAIL-M (© Supertone Inc.).
 
 ## Thêm công cụ mới
 

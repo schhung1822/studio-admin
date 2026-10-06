@@ -30,4 +30,10 @@ contextBridge.exposeInMainWorld("studioDesktop", {
     get: () => ipcRenderer.invoke("settings:get"),
     set: (patch) => ipcRenderer.invoke("settings:set", patch),
   },
+  models: {
+    read: (key) => ipcRenderer.invoke("models:read", key),
+    write: (key, data) => ipcRenderer.invoke("models:write", key, data),
+    has: (keys) => ipcRenderer.invoke("models:has", keys),
+    clear: () => ipcRenderer.invoke("models:clear"),
+  },
 });
