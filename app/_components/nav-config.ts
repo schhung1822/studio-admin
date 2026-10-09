@@ -1,5 +1,5 @@
 import type { IconSource } from "@shopify/polaris";
-import { ExchangeIcon, HomeIcon, ImagesIcon, MicrophoneIcon, PlayCircleIcon, SettingsIcon, ShieldCheckMarkIcon, SoundIcon, TextBlockIcon } from "@shopify/polaris-icons";
+import { ArrowsInHorizontalIcon, ExchangeIcon, HomeIcon, ImagesIcon, MicrophoneIcon, PlayCircleIcon, SettingsIcon, ShieldCheckMarkIcon, SoundIcon, TextBlockIcon } from "@shopify/polaris-icons";
 
 export interface NavItem {
   label: string;
@@ -49,6 +49,13 @@ export const NAV_SECTIONS: NavSection[] = [
         icon: SoundIcon,
         description:
           "Lấy riêng âm thanh từ video: giữ nguyên chất lượng gốc hoặc xuất MP3, M4A, OGG, WAV, FLAC. Chọn track, cắt đoạn, chuẩn hóa âm lượng.",
+      },
+      {
+        label: "Cắt âm thanh",
+        url: "/audio-trimmer",
+        icon: ArrowsInHorizontalIcon,
+        description:
+          "Cắt bỏ đoạn thừa trong nhạc, ghi âm, podcast trên dạng sóng, tự động xóa khoảng lặng rồi xuất MP3, M4A, WAV, FLAC.",
       },
       {
         label: "Phân cảnh theo phụ đề",

@@ -1,7 +1,7 @@
 # Studio Edit
 
-Bộ công cụ xử lý video: tách phụ đề, cắt video, chuyển đổi định dạng, phân cảnh theo phụ đề, làm sạch metadata,
-tạo giọng nói từ văn bản.
+Bộ công cụ xử lý video: tách phụ đề, cắt video, chuyển đổi định dạng, tách và cắt âm thanh, phân cảnh theo phụ đề,
+làm sạch metadata, tạo giọng nói từ văn bản.
 Cùng một mã nguồn chạy được ở hai dạng:
 
 | | Bản web | Bản Windows |
