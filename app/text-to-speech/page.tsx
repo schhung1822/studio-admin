@@ -10,6 +10,7 @@ import {
   ButtonGroup,
   Card,
   Divider,
+  InlineGrid,
   InlineStack,
   Layout,
   Page,
@@ -18,7 +19,9 @@ import {
   Select,
   Text,
   TextField,
+  Tooltip,
 } from "@shopify/polaris";
+import { PauseCircleIcon, PlayIcon } from "@shopify/polaris-icons";
 import { downloadBlob, formatBytes, formatTimecode, normalizeSearch } from "../_lib/format";
 import { describeError, execFFmpeg, getFFmpeg, takeOutputFile, withInputFile } from "../_lib/ffmpeg";
 import {
@@ -88,6 +91,23 @@ const EXPRESSION_TAGS = [
   { tag: "<sigh>", label: "Thở dài" },
 ];
 
+/** Read by the voice previews when the text box is empty. */
+const PREVIEW_SAMPLES: Partial<Record<SupertonicLang, string>> = {
+  vi: "Xin chào, đây là giọng đọc thử. Bạn thấy giọng này thế nào?",
+  en: "Hello, this is a sample of my voice. How does it sound to you?",
+  na: "Hello, this is a sample of my voice. How does it sound to you?",
+};
+const PREVIEW_MIN_CHARS = 40;
+const PREVIEW_MAX_CHARS = 160;
+/** Generated previews kept for instant replay. */
+const PREVIEW_CACHE_SIZE = 40;
+
+// Male and female voices side by side in the two-column picker.
+const VOICE_GRID = VOICES.filter((v) => v.value.startsWith("M")).flatMap((male, i) => [
+  male,
+  VOICES.filter((v) => v.value.startsWith("F"))[i],
+]);
+
 type Phase = "idle" | "loading" | "synthesizing" | "error";
 
 interface SpeechResult {
@@ -117,6 +137,23 @@ function slugify(text: string) {
   return slug || "giong-noi";
 }
 
+/**
+ * Opening of the user's text: whole sentences until it is long enough to judge a voice, shortened at a word
+ * boundary. A stock sentence when the text is empty.
+ */
+function previewSentence(text: string, lang: SupertonicLang) {
+  const sentences = text.trim().split(/(?<=[.!?…。！？])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
+  let first = "";
+  for (const sentence of sentences) {
+    if (first.length >= PREVIEW_MIN_CHARS) break;
+    first = first ? `${first} ${sentence}` : sentence;
+  }
+  if (!first) return PREVIEW_SAMPLES[lang] ?? null;
+  if (first.length <= PREVIEW_MAX_CHARS) return first;
+  const cut = first.slice(0, PREVIEW_MAX_CHARS);
+  return `${cut.slice(0, cut.lastIndexOf(" ") > 40 ? cut.lastIndexOf(" ") : PREVIEW_MAX_CHARS)}…`;
+}
+
 function describeLoad(status: TtsLoadStatus | null) {
   if (!status) return "Đang chuẩn bị…";
   if (status.stage === "init") return status.message;
@@ -141,7 +178,12 @@ export default function TextToSpeechPage() {
   const [downloaded, setDownloaded] = useState<boolean | null>(null);
   const [activeBackend, setActiveBackend] = useState(loadedTtsBackend);
   const [results, setResults] = useState<SpeechResult[]>([]);
+  const [previewLoading, setPreviewLoading] = useState<VoiceId | null>(null);
+  const [previewPlaying, setPreviewPlaying] = useState<VoiceId | null>(null);
 
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
+  /** Preview WAV URLs keyed by voice + sentence + settings, oldest first. */
+  const previewCacheRef = useRef(new Map<string, string>());
   const mountedRef = useRef(true);
   const phaseRef = useRef<Phase>("idle");
   const resultsRef = useRef<SpeechResult[]>([]);
@@ -149,6 +191,7 @@ export default function TextToSpeechPage() {
 
   const busy = phase === "loading" || phase === "synthesizing";
   const trimmed = text.trim();
+  const sampleSentence = previewSentence(text, lang);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -166,6 +209,19 @@ export default function TextToSpeechPage() {
       // nobody will hear is stopped.
       if (phaseRef.current === "synthesizing") terminateTts();
       for (const result of resultsRef.current) URL.revokeObjectURL(result.url);
+    };
+  }, []);
+
+  useEffect(() => {
+    const audio = new Audio();
+    audio.onended = () => setPreviewPlaying(null);
+    audio.onpause = () => setPreviewPlaying(null);
+    previewAudioRef.current = audio;
+    const cache = previewCacheRef.current;
+    return () => {
+      audio.pause();
+      cache.forEach((url) => URL.revokeObjectURL(url));
+      cache.clear();
     };
   }, []);
 
@@ -207,8 +263,9 @@ export default function TextToSpeechPage() {
   }, [handleError, loadEngine]);
 
   const handleGenerate = useCallback(async () => {
-    if (!trimmed || phaseRef.current === "loading" || phaseRef.current === "synthesizing") return;
+    if (!trimmed || previewLoading || phaseRef.current === "loading" || phaseRef.current === "synthesizing") return;
     setErrorMessage(null);
+    previewAudioRef.current?.pause();
     try {
       const engine = await loadEngine();
       if (!mountedRef.current) return;
@@ -235,7 +292,55 @@ export default function TextToSpeechPage() {
     } catch (error) {
       handleError(error);
     }
-  }, [handleError, lang, loadEngine, silence, speed, steps, trimmed, voice]);
+  }, [handleError, lang, loadEngine, previewLoading, silence, speed, steps, trimmed, voice]);
+
+  /** Plays `target` reading a short sentence, synthesising it once and replaying it from memory after that. */
+  const handlePreview = useCallback(
+    async (target: VoiceId) => {
+      const audio = previewAudioRef.current;
+      if (!audio) return;
+      if (previewPlaying === target) {
+        audio.pause();
+        return;
+      }
+      audio.pause();
+      if (!sampleSentence || previewLoading || phaseRef.current === "loading" || phaseRef.current === "synthesizing") return;
+      const cache = previewCacheRef.current;
+      const key = JSON.stringify([target, lang, speed, steps, sampleSentence]);
+      let url = cache.get(key);
+      if (!url) {
+        setErrorMessage(null);
+        setPreviewLoading(target);
+        try {
+          const engine = await loadEngine();
+          if (!mountedRef.current) return;
+          setPhase("idle");
+          const result = await engine.synthesize(sampleSentence, target, { lang, steps, speed, silenceSeconds: 0 });
+          if (!mountedRef.current) return;
+          url = URL.createObjectURL(encodeWav(result.wav, result.sampleRate));
+          cache.set(key, url);
+          for (const [oldKey, oldUrl] of cache) {
+            if (cache.size <= PREVIEW_CACHE_SIZE) break;
+            URL.revokeObjectURL(oldUrl);
+            cache.delete(oldKey);
+          }
+        } catch (error) {
+          handleError(error);
+          return;
+        } finally {
+          if (mountedRef.current) setPreviewLoading(null);
+        }
+      }
+      audio.src = url;
+      try {
+        await audio.play();
+        if (mountedRef.current) setPreviewPlaying(target);
+      } catch (error) {
+        if (mountedRef.current) setErrorMessage(`Không phát được bản nghe thử: ${describeError(error)}`);
+      }
+    },
+    [handleError, lang, loadEngine, previewLoading, previewPlaying, sampleSentence, speed, steps],
+  );
 
   const handleCancel = useCallback(() => {
     terminateTts();
@@ -322,7 +427,7 @@ export default function TextToSpeechPage() {
       primaryAction={{
         content: "Tạo giọng nói",
         onAction: handleGenerate,
-        disabled: !trimmed || busy,
+        disabled: !trimmed || busy || previewLoading !== null,
         loading: busy,
       }}
       secondaryActions={busy ? [{ content: "Hủy", destructive: true, onAction: handleCancel }] : undefined}
@@ -426,13 +531,44 @@ export default function TextToSpeechPage() {
                   disabled={busy}
                   helpText="Chọn đúng ngôn ngữ để phát âm chuẩn nhất."
                 />
-                <Select
-                  label="Giọng"
-                  options={VOICES.map((item) => ({ label: item.label, value: item.value }))}
-                  value={voice}
-                  onChange={(value) => setVoice(value as VoiceId)}
-                  disabled={busy}
-                />
+                <BlockStack gap="200">
+                  <Text as="p">Giọng</Text>
+                  <InlineGrid columns={2} gap="200">
+                    {VOICE_GRID.map((item) => {
+                      const playingThis = previewPlaying === item.value;
+                      return (
+                        <InlineStack key={item.value} gap="100" wrap={false}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <Button
+                              fullWidth
+                              pressed={voice === item.value}
+                              onClick={() => setVoice(item.value)}
+                              disabled={busy}
+                            >
+                              {item.label}
+                            </Button>
+                          </div>
+                          <Tooltip content={playingThis ? "Dừng" : `Nghe thử ${item.label}`}>
+                            <Button
+                              icon={playingThis ? PauseCircleIcon : PlayIcon}
+                              accessibilityLabel={playingThis ? "Dừng nghe thử" : `Nghe thử ${item.label}`}
+                              onClick={() => void handlePreview(item.value)}
+                              loading={previewLoading === item.value}
+                              disabled={!sampleSentence || busy || (previewLoading !== null && previewLoading !== item.value)}
+                            />
+                          </Tooltip>
+                        </InlineStack>
+                      );
+                    })}
+                  </InlineGrid>
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    {!sampleSentence
+                      ? "Nhập văn bản để nghe thử các giọng."
+                      : `Bấm ▶ để nghe giọng đọc ${trimmed ? "đoạn mở đầu văn bản của bạn" : "một câu mẫu"} với ngôn ngữ và tốc độ đang chọn.${
+                          activeBackend ? "" : downloaded ? " Lần đầu cần nạp mô hình." : " Lần đầu cần tải mô hình về máy."
+                        }`}
+                  </Text>
+                </BlockStack>
                 <RangeSlider
                   label="Tốc độ đọc"
                   value={speed}
